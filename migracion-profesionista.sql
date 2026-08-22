@@ -15,7 +15,11 @@ UPDATE servicios s
 
 CREATE INDEX IF NOT EXISTS ix_serv_prof ON servicios (profesionista);
 
-CREATE OR REPLACE VIEW v_ingresos AS
+-- La vista cambia el nombre de una columna, así que hay que recrearla desde cero
+-- (CREATE OR REPLACE no permite renombrar columnas existentes).
+DROP VIEW IF EXISTS v_ingresos;
+
+CREATE VIEW v_ingresos AS
 SELECT n.fecha, EXTRACT(YEAR FROM n.fecha)::int AS anio, EXTRACT(MONTH FROM n.fecha)::int AS mes,
        EXTRACT(WEEK FROM n.fecha)::int AS semana,
        n.folio, s.profesionista, s.descripcion, s.categoria, s.precio, s.propina,

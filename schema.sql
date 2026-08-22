@@ -42,7 +42,8 @@ CREATE INDEX IF NOT EXISTS ix_servicios_nota ON servicios (nota_id);
 CREATE INDEX IF NOT EXISTS ix_notas_fecha    ON notas (fecha);
 CREATE INDEX IF NOT EXISTS ix_serv_prof      ON servicios (profesionista);
 
-CREATE OR REPLACE VIEW v_ingresos AS
+DROP VIEW IF EXISTS v_ingresos;
+CREATE VIEW v_ingresos AS
 SELECT n.fecha, EXTRACT(YEAR FROM n.fecha)::int AS anio, EXTRACT(MONTH FROM n.fecha)::int AS mes,
        EXTRACT(WEEK FROM n.fecha)::int AS semana,
        n.folio, s.profesionista, s.descripcion, s.categoria, s.precio, s.propina,
