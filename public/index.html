@@ -160,7 +160,7 @@ const money=n=>'$'+(Number(n)||0).toFixed(2);
 const esc=s=>String(s??'').replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
 const round2=n=>Math.round(n*100)/100;
 let pending=[], seq=0;
-const CATS=['Uñas','Pestañas','Cabello','Cejas','Maquillaje','Depilacion','Facial','Otro'];
+const CATS=['Uñas','Pestañas','Cabello','Cejas','Maquillaje','Depilacion','Facial'];
 const EMPLEADAS=['Adrian','Andy','Ana','Blanca','Celeste','Dany','Edy','Elena','Ingrid','Ivonne',
   'Jazmin','Jessica','Joseline','Lili','Lilian','Lisandro','Liz','Lupita','Luz','Mariana','Melissa',
   'Mely','Nayeli','Palomina','Valeria','Waldo','Yareth','Zuley'];

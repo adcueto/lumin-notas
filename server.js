@@ -11,12 +11,43 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const app = express();
 const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
-const CATS = ['Uñas','Pestañas','Cabello','Cejas','Maquillaje','Depilacion','Facial','Otro'];
+const CATS = ['Uñas','Pestañas','Cabello','Cejas','Maquillaje','Depilacion','Facial'];
 const EMPLEADAS = ['Adrian','Andy','Ana','Celeste','Dany','Edy','Elena','Blanca','Yareth','Jessica',
   'Melissa','Joseline','Valeria','Lili','Lilian','Lisandro','Liz','Mely','Lupita','Mariana','Luz',
   'Palomina','Jazmin','Nayeli','Ivonne','Waldo','Ingrid','Zuley'];
 const GARANTIAS = ['Sí','No','N/A'];
 const METODOS = ['Efectivo','Tarjeta','Transferencia','Depósito','Mixto','Otro'];
+
+/* Los valores SIEMPRE salen de las tablas del negocio: nunca se inventa uno nuevo.
+   Si lo leído no coincide exacto, se elige el más parecido de la tabla. */
+const norm = s => (s||'').toString().trim().toLowerCase()
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+const distancia = (a, b) => {                        // Levenshtein
+  const m = Array.from({length: a.length+1}, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) m[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      m[i][j] = Math.min(m[i-1][j]+1, m[i][j-1]+1, m[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+  return m[a.length][b.length];
+};
+
+// Devuelve el elemento de `tabla` más parecido a `valor` (o el default si viene vacío)
+const deTabla = (valor, tabla, porDefecto) => {
+  const v = norm(valor);
+  if (!v) return porDefecto;
+  const exacto = tabla.find(x => norm(x) === v);
+  if (exacto) return exacto;
+  let mejor = porDefecto, mejorPuntaje = Infinity;
+  for (const opt of tabla) {
+    const o = norm(opt);
+    const puntaje = (o.startsWith(v) || v.startsWith(o))
+      ? Math.abs(o.length - v.length) * 0.5
+      : distancia(v, o);
+    if (puntaje < mejorPuntaje) { mejorPuntaje = puntaje; mejor = opt; }
+  }
+  return mejor;
+};
 
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '1mb' }));
@@ -61,7 +92,7 @@ Reglas:
   IMPORTANTE para Cejas vs Depilacion:
   * "Depilacion" = CUALQUIER depilación, de cualquier zona del cuerpo, incluidas las cejas. Abreviaciones comunes: "Depi", "Dep.", "Depil". Si el texto solo dice "Depi" sin más contexto, la descripción estándar es "Depilación de Cejas".
   * "Cejas" = SOLO planchado (laminado), henna, o paquete de cejas. Nada de depilación.
-  Si no calza en ninguna, usa "Otro".
+  Elige SIEMPRE una categoría de la tabla, la que mejor corresponda. NUNCA uses una categoría que no esté en la tabla.
 - propina: solo si el ticket la menciona explícitamente por separado del cobro del servicio. Si no se menciona, usa 0.
 - garantia: usa "N/A" salvo que la nota indique explícitamente garantía Sí o No para ese servicio.
 - total: el número junto a "TOTAL".
@@ -84,12 +115,12 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
     const n = JSON.parse(txt.slice(s, e + 1));
     n.servicios = (n.servicios || []).map(x => ({
       descripcion: x.descripcion || '',
-      categoria: CATS.includes(x.categoria) ? x.categoria : 'Otro',
+      categoria: deTabla(x.categoria, CATS, 'Uñas'),
       precio: Number(x.precio) || 0,
       propina: Number(x.propina) || 0,
-      garantia: GARANTIAS.includes(x.garantia) ? x.garantia : 'N/A'
+      garantia: deTabla(x.garantia, GARANTIAS, 'N/A')
     }));
-    if (!METODOS.includes(n.metodo_pago)) n.metodo_pago = 'Efectivo';
+    n.metodo_pago = deTabla(n.metodo_pago, METODOS, 'Efectivo');
     // Normalizar descripciones abreviadas a nombre estándar
     const SERV_ESTANDAR = [
       [/^dep(i|il)?\.?$/i,                      'Depilación de Cejas'],
@@ -123,34 +154,10 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
       return s;
     });
 
-    // El nombre SIEMPRE sale del catálogo: buscamos el más parecido por distancia de edición.
+    // La empleada SIEMPRE sale del catálogo (alias primero, luego el más parecido)
     const ALIAS = { melina: 'Mely', wualdo: 'Waldo', lupe: 'Lupita', guadalupe: 'Lupita' };
-    const norm = s => (s||'').toString().trim().toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const distancia = (a, b) => {                    // Levenshtein
-      const m = Array.from({length: a.length+1}, (_, i) => [i, ...Array(b.length).fill(0)]);
-      for (let j = 0; j <= b.length; j++) m[0][j] = j;
-      for (let i = 1; i <= a.length; i++)
-        for (let j = 1; j <= b.length; j++)
-          m[i][j] = Math.min(m[i-1][j]+1, m[i][j-1]+1, m[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
-      return m[a.length][b.length];
-    };
     const nEsp = norm(n.especialista);
-    if (nEsp) {
-      if (ALIAS[nEsp]) n.especialista = ALIAS[nEsp];
-      else {
-        let mejor = null, mejorPuntaje = Infinity;
-        for (const emp of EMPLEADAS) {
-          const e = norm(emp);
-          // Un prefijo escrito ("Jaz" por Jazmin) cuenta casi como acierto exacto
-          const puntaje = (e.startsWith(nEsp) || nEsp.startsWith(e))
-            ? Math.abs(e.length - nEsp.length) * 0.5
-            : distancia(nEsp, e);
-          if (puntaje < mejorPuntaje) { mejorPuntaje = puntaje; mejor = emp; }
-        }
-        if (mejor) n.especialista = mejor;           // nunca se queda un nombre fuera del catálogo
-      }
-    }
+    if (nEsp) n.especialista = ALIAS[nEsp] || deTabla(n.especialista, EMPLEADAS, '');
 
     // Guardia de fecha: si quedó en el futuro, probable día/mes volteado
     if (n.fecha && /^\d{4}-\d{2}-\d{2}$/.test(n.fecha)) {
