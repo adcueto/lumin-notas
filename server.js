@@ -142,15 +142,22 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
     // Reglas fijas de categoría (mandan sobre lo que haya clasificado la IA)
     const sinAcentos = s => (s||'').toString().toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    // Palabras que delatan uñas o pestañas: protegen de falsos positivos
+    // (ej. "gel color" es uñas, no cabello, aunque diga "color")
+    const ES_UNAS_O_PESTANAS = /gel|acr[ií]lic|u[ñn]a|manicure|pedicure|\btips?\b|pesta[ñn]a|lash|nagaraku|rizado|extensi[oó]n|mirada|anime|relleno|esmalt|cut[ií]cula|dise[ñn]o\s*de\s*cejas?/;
     const REGLAS_CAT = [
-      [/\bcorte/,                                   'Cabello'],      // todo corte va a Cabello
+      // Cabello: cualquier servicio capilar
+      [/\bcorte|tinte|\bcolor|decolora|mecha|balaya|baliag|ombre|rayito|matiz|alacia|alisad|keratin|queratin|botox|peinad|secado|cepillad|permanente|cabello|\bpelo\b|tratamiento\s*capilar|shampoo|ampolleta/, 'Cabello'],
       [/\bdepi|\bdepil/,                            'Depilacion'],
       [/planchado|henna|paquete\s*(de\s*)?cejas/,   'Cejas']
     ];
     n.servicios = n.servicios.map(s => {
       const d = sinAcentos(s.descripcion);
-      for (const [re, cat] of REGLAS_CAT)
+      for (const [re, cat] of REGLAS_CAT) {
+        // La regla de Cabello no aplica si el texto habla claramente de uñas o pestañas
+        if (cat === 'Cabello' && ES_UNAS_O_PESTANAS.test(d)) continue;
         if (re.test(d)) return { ...s, categoria: cat };
+      }
       return s;
     });
 
