@@ -48,7 +48,7 @@
   input,select{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:6px;background:#FFFAFB;color:var(--ink);font-family:'Space Mono',monospace;font-size:13px}
   input.num{text-align:right}
   .scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .items{width:100%;min-width:460px;border-collapse:collapse;margin-top:6px}
+  .items{width:100%;min-width:620px;border-collapse:collapse;margin-top:6px}
   .items th{font-family:'Space Mono',monospace;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);text-align:left;font-weight:400;padding:6px;border-bottom:1px solid var(--line)}
   .items th.r,.items td.r{text-align:right}
   .items td{padding:5px 6px;border-bottom:1px dotted var(--line)}
@@ -144,7 +144,7 @@
       <div class="ch-box tall"><canvas id="ch-dia"></canvas></div>
     </div>
     <div class="dash-grid">
-      <div class="panel"><h3>Por especialista</h3><div class="ch-box"><canvas id="ch-esp"></canvas></div></div>
+      <div class="panel"><h3>Por profesionista</h3><div class="ch-box"><canvas id="ch-esp"></canvas></div></div>
       <div class="panel"><h3>Servicios más vendidos</h3><table class="log" id="top-serv"></table></div>
     </div>
     <div class="panel" style="margin-top:20px">
@@ -272,6 +272,7 @@ function receiptHTML(t){
     :'<span class="flag new">Folio nuevo</span>';
   const calc=lineOk(t), decl=Number(t.total)||0, match=Math.abs(calc-decl)<0.02;
   const rows=(t.servicios||[]).map((a,i)=>`<tr>
+    <td><input list="emplist" style="width:110px" value="${esc(a.profesionista||'')}" oninput="upd(${t.id},'servicios.${i}.profesionista',this.value)"></td>
     <td><input value="${esc(a.descripcion)}" oninput="upd(${t.id},'servicios.${i}.descripcion',this.value)"></td>
     <td><select onchange="upd(${t.id},'servicios.${i}.categoria',this.value)">${CATS.map(c=>`<option ${c===a.categoria?'selected':''}>${c}</option>`).join('')}</select></td>
     <td class="r"><input class="num" style="width:70px" value="${a.precio}" oninput="upd(${t.id},'servicios.${i}.precio',this.value)"></td>
@@ -285,11 +286,10 @@ function receiptHTML(t){
       <div><label>Fecha</label><input value="${esc(t.fecha)}" oninput="upd(${t.id},'fecha',this.value)"></div>
       <div><label>Folio</label><input value="${esc(t.folio)}" oninput="upd(${t.id},'folio',this.value)"></div>
       <div><label>Cliente</label><input value="${esc(t.cliente)}" oninput="upd(${t.id},'cliente',this.value)"></div>
-      <div><label>Empleada</label><input list="emplist" value="${esc(t.especialista)}" oninput="upd(${t.id},'especialista',this.value)"></div>
       <div><label>Pago</label><select onchange="upd(${t.id},'metodo_pago',this.value)">${METODOS.map(p=>`<option ${p===t.metodo_pago?'selected':''}>${p}</option>`).join('')}</select></div>
     </div>
     <div class="r-dots"></div>
-    <div class="scrollx"><table class="items"><tr><th>Servicio</th><th>Categoría</th><th class="r">Precio</th><th class="r">Propina</th><th>Garantía</th><th></th></tr>${rows}</table></div>
+    <div class="scrollx"><table class="items"><tr><th>Profesionista</th><th>Servicio</th><th>Categoría</th><th class="r">Precio</th><th class="r">Propina</th><th>Garantía</th><th></th></tr>${rows}</table></div>
     <div class="r-total"><span>TOTAL CALCULADO</span><span id="tot-${t.id}">${money(calc)}</span></div>
     <div class="r-check ${match?'ok':'bad'}" id="chk-${t.id}">${match?'✓ Cuadra con la nota ('+money(decl)+')':'⚠ La nota dice '+money(decl)+' — revisa precios'}</div>
     <div class="r-actions">
@@ -305,9 +305,9 @@ async function refresh(){
   $('s-ef').textContent=money(s.total_efectivo); $('s-ta').textContent=money(s.total_tarjeta); $('s-tr').textContent=money(s.total_transferencia);
   if(g.length){
     const rows=g.slice().reverse().slice(0,40).map(r=>`<tr><td>${String(r.fecha).slice(0,10)}</td><td>${esc(r.folio)}</td>
-      <td>${esc(r.especialista)}</td><td>${esc(r.descripcion)}</td><td>${esc(r.categoria)}</td><td class="r">${money(r.precio)}</td></tr>`).join('');
+      <td>${esc(r.profesionista)}</td><td>${esc(r.descripcion)}</td><td>${esc(r.categoria)}</td><td class="r">${money(r.precio)}</td></tr>`).join('');
     $('saved').innerHTML=`<div class="panel"><h3>Servicios guardados</h3><div class="scrollx"><table class="log">
-      <tr><th>Fecha</th><th>Folio</th><th>Empleada</th><th>Servicio</th><th>Categoría</th><th class="r">Cobro</th></tr>${rows}</table></div>
+      <tr><th>Fecha</th><th>Folio</th><th>Profesionista</th><th>Servicio</th><th>Categoría</th><th class="r">Cobro</th></tr>${rows}</table></div>
       ${g.length>40?`<p class="note">Mostrando los 40 más recientes de ${g.length}.</p>`:''}</div>`;
   } else if(!pending.length){
     $('saved').innerHTML=`<div class="empty"><p>Aquí aparecen las notas capturadas.</p></div>`;

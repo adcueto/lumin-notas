@@ -29,6 +29,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_folio_nota
 CREATE TABLE IF NOT EXISTS servicios (
   id             SERIAL PRIMARY KEY,
   nota_id        INTEGER NOT NULL REFERENCES notas(id) ON DELETE CASCADE,
+  profesionista  TEXT NOT NULL DEFAULT '',
   descripcion    TEXT NOT NULL,
   categoria      TEXT NOT NULL DEFAULT 'Uñas',
   precio         NUMERIC(10,2) NOT NULL,
@@ -39,12 +40,12 @@ CREATE TABLE IF NOT EXISTS servicios (
 
 CREATE INDEX IF NOT EXISTS ix_servicios_nota ON servicios (nota_id);
 CREATE INDEX IF NOT EXISTS ix_notas_fecha    ON notas (fecha);
-CREATE INDEX IF NOT EXISTS ix_notas_esp      ON notas (especialista);
+CREATE INDEX IF NOT EXISTS ix_serv_prof      ON servicios (profesionista);
 
 CREATE OR REPLACE VIEW v_ingresos AS
 SELECT n.fecha, EXTRACT(YEAR FROM n.fecha)::int AS anio, EXTRACT(MONTH FROM n.fecha)::int AS mes,
        EXTRACT(WEEK FROM n.fecha)::int AS semana,
-       n.folio, n.especialista, s.descripcion, s.categoria, s.precio, s.propina,
+       n.folio, s.profesionista, s.descripcion, s.categoria, s.precio, s.propina,
        n.metodo_pago, s.garantia, s.notas_obs, n.cliente, n.total_nota
 FROM servicios s JOIN notas n ON n.id = s.nota_id
 ORDER BY n.fecha, n.id, s.id;

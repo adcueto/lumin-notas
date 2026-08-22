@@ -79,13 +79,13 @@ app.get('/api/me', (req, res) => req.session.uid ? res.json({ nombre: req.sessio
 const PROMPT = `Eres un capturista de notas de remisión de un salón de belleza (LUMIN LASHES & NAILS) en Querétaro, México. Analiza la foto de la nota y devuelve SOLO un objeto JSON, sin markdown ni explicación.
 
 Formato exacto:
-{"fecha":"YYYY-MM-DD","folio":"numero o SN","cliente":"","especialista":"","metodo_pago":"Efectivo|Tarjeta|Transferencia|Depósito|Mixto|Otro","total":0,"servicios":[{"descripcion":"","categoria":"","precio":0,"propina":0,"garantia":"N/A"}]}
+{"fecha":"YYYY-MM-DD","folio":"numero o SN","cliente":"","metodo_pago":"Efectivo|Tarjeta|Transferencia|Depósito|Mixto|Otro","total":0,"servicios":[{"profesionista":"","descripcion":"","categoria":"","precio":0,"propina":0,"garantia":"N/A"}]}
 
 Reglas:
 - fecha: la nota trae DÍA/MES/AÑO, a veces con año de 2 dígitos (ej "17 08 26" = 17 de agosto de 2026). Interpreta años de 2 dígitos como 20XX. NUNCA leas el primer número como mes.
 - folio: el número en el recuadro superior derecho (o el # de nota). Si no hay, "SN".
 - cliente: el nombre escrito junto a "CLIENTE".
-- especialista: el nombre manuscrito en la columna "PROFESIONISTA". OBLIGATORIO: devuelve SIEMPRE uno de estos nombres exactos del catálogo del salón, nunca uno distinto: ${EMPLEADAS.join(', ')}. La letra es manuscrita y puede estar abreviada o mal escrita; elige el del catálogo más parecido a lo que ves. Alias conocidos: "Melina"=Mely, "Wualdo"=Waldo. NUNCA inventes ni copies un nombre que no esté en el catálogo; si dudas entre varios, escoge el más parecido de la lista.
+- profesionista: la columna "PROFESIONISTA" es POR RENGLÓN: cada servicio puede tener una profesionista distinta (a una misma clienta la pueden atender varias). Lee el nombre de CADA renglón por separado. Si un renglón tiene la celda vacía porque comparte la misma profesionista del renglón de arriba (es común que solo la escriban una vez), repite ese nombre. OBLIGATORIO: devuelve SIEMPRE uno de estos nombres exactos del catálogo, nunca uno distinto: ${EMPLEADAS.join(', ')}. La letra es manuscrita y puede estar abreviada o mal escrita; elige el del catálogo más parecido. Alias: "Melina"=Mely, "Wualdo"=Waldo. NUNCA inventes un nombre fuera del catálogo.
 - metodo_pago: revisa cuál casilla está marcada (Efvo./Efectivo, Tarjeta, Transf./Transferencia, Depósito, o si hay más de una marcada usa "Mixto"). Si ninguna casilla está marcada o el campo está vacío, usa SIEMPRE "Efectivo".
 - servicios: cada renglón de la tabla con su descripción y precio. Ignora renglones vacíos o tachados.
 - categoria: clasifica cada servicio en una de estas categorías exactas: ${CATS.join(', ')}. Uñas: gel, acrílico, relleno, manicure, pedicure, esmaltado, retiro. Pestañas: lash, extensiones, mirada, aplicación, rizado, anime. Cabello: TODO lo que sea corte (corte de dama, corte caballero, corte niño, "corte" a secas), tinte, peinado, alaciado, mechas. Maquillaje: maquillaje social, novia. Facial: limpieza, hidratación.
@@ -113,13 +113,25 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
     const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
     if (s < 0) return res.status(422).json({ error: 'No se reconoció una nota en esta foto.' });
     const n = JSON.parse(txt.slice(s, e + 1));
+    const ALIAS = { melina: 'Mely', wualdo: 'Waldo', lupe: 'Lupita', guadalupe: 'Lupita' };
+    const resolverProf = v => {
+      const p = norm(v);
+      if (!p) return '';
+      return ALIAS[p] || deTabla(v, EMPLEADAS, '');
+    };
     n.servicios = (n.servicios || []).map(x => ({
+      profesionista: resolverProf(x.profesionista),
       descripcion: x.descripcion || '',
       categoria: deTabla(x.categoria, CATS, 'Uñas'),
       precio: Number(x.precio) || 0,
       propina: Number(x.propina) || 0,
       garantia: deTabla(x.garantia, GARANTIAS, 'N/A')
     }));
+    // Si un renglón trae la celda vacía, hereda la profesionista del anterior
+    let ultima = '';
+    n.servicios.forEach(s => {
+      if (s.profesionista) ultima = s.profesionista; else s.profesionista = ultima;
+    });
     n.metodo_pago = deTabla(n.metodo_pago, METODOS, 'Efectivo');
     // Normalizar descripciones abreviadas a nombre estándar
     const SERV_ESTANDAR = [
@@ -161,11 +173,6 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
       return s;
     });
 
-    // La empleada SIEMPRE sale del catálogo (alias primero, luego el más parecido)
-    const ALIAS = { melina: 'Mely', wualdo: 'Waldo', lupe: 'Lupita', guadalupe: 'Lupita' };
-    const nEsp = norm(n.especialista);
-    if (nEsp) n.especialista = ALIAS[nEsp] || deTabla(n.especialista, EMPLEADAS, '');
-
     // Guardia de fecha: si quedó en el futuro, probable día/mes volteado
     if (n.fecha && /^\d{4}-\d{2}-\d{2}$/.test(n.fecha)) {
       const hoy = new Date().toISOString().slice(0,10);
@@ -198,13 +205,13 @@ app.post('/api/notas', auth, async (req, res) => {
     const { rows } = await c.query(
       `INSERT INTO notas (fecha,folio,cliente,especialista,metodo_pago,total_nota,creado_por)
        VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [n.fecha, folio, n.cliente||'', n.especialista||'', n.metodo_pago, round2(n.total)||0, req.session.uid]);
+      [n.fecha, folio, n.cliente||'', '', n.metodo_pago, round2(n.total)||0, req.session.uid]);
     const nid = rows[0].id;
     for (const sv of n.servicios)
       await c.query(
-        `INSERT INTO servicios (nota_id,descripcion,categoria,precio,propina,garantia,notas_obs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [nid, sv.descripcion, sv.categoria || 'Otro', round2(sv.precio), round2(sv.propina)||0, sv.garantia||'N/A', sv.notas_obs||'']);
+        `INSERT INTO servicios (nota_id,profesionista,descripcion,categoria,precio,propina,garantia,notas_obs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [nid, sv.profesionista||'', sv.descripcion, sv.categoria || 'Uñas', round2(sv.precio), round2(sv.propina)||0, sv.garantia||'N/A', sv.notas_obs||'']);
     await c.query('COMMIT');
     res.json({ ok: true, nota_id: nid });
   } catch (err) {
@@ -239,8 +246,9 @@ app.get('/api/dashboard', auth, async (_req, res) => {
   const q = sql => pool.query(sql).then(r => r.rows);
   try {
     const [porEspecialista, porServicio, porDia, topClientes] = await Promise.all([
-      q(`SELECT n.especialista AS etiqueta, count(*) AS servicios, sum(s.precio) AS total
-         FROM servicios s JOIN notas n ON n.id=s.nota_id GROUP BY 1 ORDER BY 3 DESC`),
+      q(`SELECT s.profesionista AS etiqueta, count(*) AS servicios, sum(s.precio) AS total
+         FROM servicios s JOIN notas n ON n.id=s.nota_id
+         WHERE s.profesionista <> '' GROUP BY 1 ORDER BY 3 DESC`),
       q(`SELECT s.descripcion AS etiqueta, count(*) AS veces, sum(s.precio) AS total
          FROM servicios s GROUP BY 1 ORDER BY 3 DESC LIMIT 10`),
       q(`SELECT to_char(n.fecha,'DD/MM') AS etiqueta, sum(s.precio) AS total
@@ -263,7 +271,7 @@ app.get('/api/export.csv', auth, async (req, res) => {
   const head = ['Fecha','Año','Mes','Semana','# Nota','Empleada','Servicio','Categoría','Cobro','Propina','Metodo_Pago','Garantía','Notas'];
   const q = v => `"${String(v??'').replace(/"/g,'""')}"`;
   const body = rows.map(r => [r.fecha.toISOString().slice(0,10), r.anio, r.mes, r.semana, r.folio,
-    r.especialista, r.descripcion, r.categoria, r.precio, r.propina, r.metodo_pago, r.garantia, r.notas_obs].map(q).join(','));
+    r.profesionista, r.descripcion, r.categoria, r.precio, r.propina, r.metodo_pago, r.garantia, r.notas_obs].map(q).join(','));
   res.setHeader('Content-Type','text/csv; charset=utf-8');
   res.setHeader('Content-Disposition','attachment; filename="lumin-notas.csv"');
   res.send('\uFEFF'+[head.map(q).join(','), ...body].join('\n'));
