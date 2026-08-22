@@ -54,7 +54,7 @@ Reglas:
 - fecha: la nota trae DÍA/MES/AÑO, a veces con año de 2 dígitos (ej "17 08 26" = 17 de agosto de 2026). Interpreta años de 2 dígitos como 20XX. NUNCA leas el primer número como mes.
 - folio: el número en el recuadro superior derecho (o el # de nota). Si no hay, "SN".
 - cliente: el nombre escrito junto a "CLIENTE".
-- especialista: el nombre manuscrito en la columna "PROFESIONISTA". DEBE ser uno de estos nombres del catálogo del salón: ${EMPLEADAS.join(', ')}. Elige el del catálogo que más se parezca a lo escrito (la letra es manuscrita y puede estar abreviada o mal escrita). Alias conocidos: "Melina"=Mely, "Wualdo"/"Waldo"=Waldo. Si de plano no se parece a ninguno, deja el nombre tal como está escrito.
+- especialista: el nombre manuscrito en la columna "PROFESIONISTA". OBLIGATORIO: devuelve SIEMPRE uno de estos nombres exactos del catálogo del salón, nunca uno distinto: ${EMPLEADAS.join(', ')}. La letra es manuscrita y puede estar abreviada o mal escrita; elige el del catálogo más parecido a lo que ves. Alias conocidos: "Melina"=Mely, "Wualdo"=Waldo. NUNCA inventes ni copies un nombre que no esté en el catálogo; si dudas entre varios, escoge el más parecido de la lista.
 - metodo_pago: revisa cuál casilla está marcada (Efvo./Efectivo, Tarjeta, Transf./Transferencia, Depósito, o si hay más de una marcada usa "Mixto"). Si ninguna casilla está marcada o el campo está vacío, usa SIEMPRE "Efectivo".
 - servicios: cada renglón de la tabla con su descripción y precio. Ignora renglones vacíos o tachados.
 - categoria: clasifica cada servicio en una de estas categorías exactas: ${CATS.join(', ')}. Uñas: gel, acrílico, relleno, manicure, pedicure, esmaltado, retiro. Pestañas: lash, extensiones, mirada, aplicación, rizado, anime. Cabello: TODO lo que sea corte (corte de dama, corte caballero, corte niño, "corte" a secas), tinte, peinado, alaciado, mechas. Maquillaje: maquillaje social, novia. Facial: limpieza, hidratación.
@@ -123,20 +123,32 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
       return s;
     });
 
-    // Alias y normalización contra el catálogo de empleadas
-    const ALIAS = { melina: 'Mely', wualdo: 'Waldo', waldo: 'Waldo' };
+    // El nombre SIEMPRE sale del catálogo: buscamos el más parecido por distancia de edición.
+    const ALIAS = { melina: 'Mely', wualdo: 'Waldo', lupe: 'Lupita', guadalupe: 'Lupita' };
     const norm = s => (s||'').toString().trim().toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const distancia = (a, b) => {                    // Levenshtein
+      const m = Array.from({length: a.length+1}, (_, i) => [i, ...Array(b.length).fill(0)]);
+      for (let j = 0; j <= b.length; j++) m[0][j] = j;
+      for (let i = 1; i <= a.length; i++)
+        for (let j = 1; j <= b.length; j++)
+          m[i][j] = Math.min(m[i-1][j]+1, m[i][j-1]+1, m[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+      return m[a.length][b.length];
+    };
     const nEsp = norm(n.especialista);
     if (nEsp) {
       if (ALIAS[nEsp]) n.especialista = ALIAS[nEsp];
       else {
-        const exacta = EMPLEADAS.find(x => norm(x) === nEsp);
-        if (exacta) n.especialista = exacta;
-        else {
-          const parcial = EMPLEADAS.find(x => norm(x).startsWith(nEsp) || nEsp.startsWith(norm(x)));
-          if (parcial) n.especialista = parcial;
+        let mejor = null, mejorPuntaje = Infinity;
+        for (const emp of EMPLEADAS) {
+          const e = norm(emp);
+          // Un prefijo escrito ("Jaz" por Jazmin) cuenta casi como acierto exacto
+          const puntaje = (e.startsWith(nEsp) || nEsp.startsWith(e))
+            ? Math.abs(e.length - nEsp.length) * 0.5
+            : distancia(nEsp, e);
+          if (puntaje < mejorPuntaje) { mejorPuntaje = puntaje; mejor = emp; }
         }
+        if (mejor) n.especialista = mejor;           // nunca se queda un nombre fuera del catálogo
       }
     }
 
