@@ -241,7 +241,17 @@ async function handle(files){
 const lineOk=t=>round2((t.servicios||[]).reduce((s,a)=>s+(Number(a.precio)||0),0));
 
 window.upd=(id,path,val)=>{ const t=pending.find(x=>x.id===id); const [k,i,f]=path.split('.');
-  if(i===undefined) t[k]=val; else t.servicios[+i][f]=(f==='precio')?(Number(val)||0):val; render(); };
+  if(i===undefined) t[k]=val; else t.servicios[+i][f]=(f==='precio'||f==='propina')?(Number(val)||0):val;
+  // No redibujamos la tarjeta: eso destruiría el campo y sacaría el cursor.
+  // Solo actualizamos los números que dependen de lo editado.
+  refreshTotals(t); };
+function refreshTotals(t){
+  const calc=lineOk(t), decl=Number(t.total)||0, match=Math.abs(calc-decl)<0.02;
+  const tot=document.getElementById('tot-'+t.id), chk=document.getElementById('chk-'+t.id);
+  if(tot) tot.textContent=money(calc);
+  if(chk){ chk.className='r-check '+(match?'ok':'bad');
+    chk.textContent=match?'✓ Cuadra con la nota ('+money(decl)+')':'⚠ La nota dice '+money(decl)+' — revisa precios'; }
+}
 window.delItem=(id,i)=>{ pending.find(x=>x.id===id).servicios.splice(i,1); render(); };
 window.discard=id=>{ pending=pending.filter(x=>x.id!==id); render(); };
 window.save=async id=>{
@@ -280,8 +290,8 @@ function receiptHTML(t){
     </div>
     <div class="r-dots"></div>
     <div class="scrollx"><table class="items"><tr><th>Servicio</th><th>Categoría</th><th class="r">Precio</th><th class="r">Propina</th><th>Garantía</th><th></th></tr>${rows}</table></div>
-    <div class="r-total"><span>TOTAL CALCULADO</span><span>${money(calc)}</span></div>
-    <div class="r-check ${match?'ok':'bad'}">${match?'✓ Cuadra con la nota ('+money(decl)+')':'⚠ La nota dice '+money(decl)+' — revisa precios'}</div>
+    <div class="r-total"><span>TOTAL CALCULADO</span><span id="tot-${t.id}">${money(calc)}</span></div>
+    <div class="r-check ${match?'ok':'bad'}" id="chk-${t.id}">${match?'✓ Cuadra con la nota ('+money(decl)+')':'⚠ La nota dice '+money(decl)+' — revisa precios'}</div>
     <div class="r-actions">
       <button class="btn btn-p btn-sm" onclick="save(${t.id})" ${t.duplicado?'disabled':''}>${t.duplicado?'Duplicado':'Guardar servicios'}</button>
       <button class="btn btn-s btn-sm" onclick="discard(${t.id})">Descartar</button></div></div>`;
@@ -303,7 +313,23 @@ async function refresh(){
     $('saved').innerHTML=`<div class="empty"><p>Aquí aparecen las notas capturadas.</p></div>`;
   }
 }
-function render(){ $('queue').innerHTML=pending.map(receiptHTML).join(''); }
+function render(){
+  const cont=$('queue');
+  // Reconstruimos solo las tarjetas cuya "forma" cambió (cargando, error, duplicado,
+  // o número de renglones). Así no se pierde el cursor mientras alguien escribe.
+  const firma=t=>[t.loading?'L':'', t.error?'E':'', t.duplicado?'D':'', (t.servicios||[]).length].join('|');
+  const vivas=new Set(pending.map(t=>String(t.id)));
+  [...cont.children].forEach(el=>{ if(!vivas.has(el.dataset.id)) el.remove(); });
+  pending.forEach(t=>{
+    let el=cont.querySelector(`[data-id="${t.id}"]`);
+    const f=firma(t);
+    if(el && el.dataset.firma===f) return;          // sin cambios estructurales: no tocar
+    const wrap=document.createElement('div');
+    wrap.dataset.id=t.id; wrap.dataset.firma=f;
+    wrap.innerHTML=receiptHTML(t);
+    if(el) cont.replaceChild(wrap,el); else cont.appendChild(wrap);
+  });
+}
 
 $('csv').onclick=()=>{ location.href='/api/export.csv'; };
 
