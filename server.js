@@ -323,6 +323,50 @@ app.get('/api/produccion', auth, async (req, res) => {
   }
 });
 
+/* Matriz día × profesionista de una semana (como el control de Excel).
+   ?semana=33&anio=2026  ·  sin parámetros = semana en curso */
+app.get('/api/semana', auth, async (req, res) => {
+  const semana = Number(req.query.semana) || null;
+  const anio = Number(req.query.anio) || new Date().getFullYear();
+  try {
+    const filtro = semana
+      ? `EXTRACT(WEEK FROM n.fecha)::int = $1 AND EXTRACT(ISOYEAR FROM n.fecha)::int = $2`
+      : `date_trunc('week', n.fecha) = date_trunc('week', CURRENT_DATE)`;
+    const params = semana ? [semana, anio] : [];
+
+    const { rows } = await pool.query(
+      `SELECT n.fecha, s.profesionista,
+              sum(s.precio) AS total, count(*) AS servicios
+       FROM servicios s JOIN notas n ON n.id = s.nota_id
+       WHERE s.profesionista <> '' AND ${filtro}
+       GROUP BY 1,2 ORDER BY 1,2`, params);
+
+    // Número de semana real de lo encontrado (útil cuando no se pidió una específica)
+    const { rows: meta } = await pool.query(
+      `SELECT DISTINCT EXTRACT(WEEK FROM n.fecha)::int AS semana,
+              EXTRACT(ISOYEAR FROM n.fecha)::int AS anio
+       FROM notas n WHERE ${filtro} LIMIT 1`, params);
+
+    const dias = [...new Set(rows.map(r => r.fecha.toISOString().slice(0,10)))].sort();
+    const profs = [...new Set(rows.map(r => r.profesionista))].sort();
+    const celdas = {};
+    let totalServicios = 0;
+    for (const r of rows) {
+      celdas[`${r.fecha.toISOString().slice(0,10)}|${r.profesionista}`] =
+        { total: Number(r.total), servicios: Number(r.servicios) };
+      totalServicios += Number(r.servicios);
+    }
+    res.json({
+      semana: meta[0]?.semana || semana,
+      anio: meta[0]?.anio || anio,
+      dias, profesionistas: profs, celdas, totalServicios
+    });
+  } catch (err) {
+    console.error('semana:', err);
+    res.status(500).json({ error: 'Error consultando la semana.' });
+  }
+});
+
 app.get('/api/export.csv', auth, async (req, res) => {
   const { desde, hasta } = req.query;
   const { rows } = await pool.query(

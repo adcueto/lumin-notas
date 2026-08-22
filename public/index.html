@@ -83,6 +83,17 @@
     border-radius:7px;border:1px solid var(--line);background:var(--paper);color:var(--ink-soft);cursor:pointer}
   .seg button.on{border-color:var(--pink);color:var(--pink);background:var(--hov)}
   .log tr.tot td{border-top:2px solid var(--pink);font-weight:700;padding-top:8px}
+  /* matriz día × empleada, estilo del control de Excel */
+  .matriz{border-collapse:collapse;font-family:'Space Mono',monospace;font-size:12px;min-width:760px}
+  .matriz th{background:var(--pink);color:#fff;font-weight:700;font-size:10px;letter-spacing:.05em;
+    text-transform:uppercase;padding:7px 9px;text-align:right;white-space:nowrap;border:1px solid #fff}
+  .matriz th.izq{text-align:left}
+  .matriz td{padding:6px 9px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line)}
+  .matriz td.izq{text-align:left}
+  .matriz td.dia{color:var(--ink-soft)}
+  .matriz td.cero{color:#D8CCD4}
+  .matriz tr.tot td{background:var(--hov);font-weight:700;border-top:2px solid var(--pink)}
+  .matriz tr:hover td{background:#FFF9FB}
   #login{max-width:340px;margin:12vh auto;background:var(--paper);border:1px solid var(--line);border-radius:var(--r);padding:26px}
   #login h1{font-size:27px;margin-bottom:4px}
   #login .f{margin-bottom:12px}
@@ -144,6 +155,17 @@
   </div>
 
   <div id="v-dash" class="hide">
+    <div class="panel">
+      <h3>Ingresos por empleada · día a día</h3>
+      <div class="seg" style="align-items:center">
+        <button id="sem-ant">← Semana anterior</button>
+        <span id="sem-label" style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--pink);padding:0 6px"></span>
+        <button id="sem-sig">Semana siguiente →</button>
+        <button id="sem-hoy">Semana en curso</button>
+      </div>
+      <div class="scrollx"><table class="matriz" id="tbl-semana"></table></div>
+      <p class="note">Cada celda es lo que cobró esa profesionista ese día. Compara contra lo que te reportan.</p>
+    </div>
     <div class="panel">
       <h3>Producción por profesionista <span id="prod-titulo" style="color:var(--pink)"></span></h3>
       <div class="seg" id="seg-prod">
@@ -357,6 +379,52 @@ $('csv').onclick=()=>{ location.href='/api/export.csv'; };
 const PAL=['#EC407A','#F8BBD0','#AD1457','#3D2B36','#E57373','#8E5A6E','#B0A4AC'];
 let charts={};
 function mkChart(id,cfg){ if(charts[id]) charts[id].destroy(); charts[id]=new Chart($(id),cfg); }
+/* ---- matriz día × empleada (control semanal) ---- */
+const DIAS_ES=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+let semanaVista=null, anioVista=null;   // null = semana en curso
+$('sem-ant').onclick=()=>{ if(semanaVista===null){ return; } semanaVista--; if(semanaVista<1){semanaVista=52;anioVista--;} loadSemana(); };
+$('sem-sig').onclick=()=>{ if(semanaVista===null){ return; } semanaVista++; if(semanaVista>53){semanaVista=1;anioVista++;} loadSemana(); };
+$('sem-hoy').onclick=()=>{ semanaVista=null; anioVista=null; loadSemana(); };
+
+async function loadSemana(){
+  const url = semanaVista ? `/api/semana?semana=${semanaVista}&anio=${anioVista}` : '/api/semana';
+  const r=await fetch(url); if(!r.ok) return;
+  const d=await r.json();
+  // Al cargar por primera vez, fijamos la semana para poder navegar
+  if(semanaVista===null && d.semana){ semanaVista=d.semana; anioVista=d.anio; }
+  $('sem-label').textContent = d.semana ? `Semana ${d.semana} · ${d.anio}` : 'Sin datos';
+
+  if(!d.dias.length){
+    $('tbl-semana').innerHTML='<tr><td style="padding:16px;color:var(--ink-soft)">Sin servicios capturados en esta semana.</td></tr>';
+    return;
+  }
+  const profs=d.profesionistas;
+  // Encabezado
+  let html='<tr><th class="izq">Fecha</th><th class="izq">Día</th><th>Servicios</th>'
+    + profs.map(p=>`<th>${esc(p)}</th>`).join('') + '<th>Total día</th></tr>';
+  // Un renglón por día
+  const totalesProf={}; let granTotal=0, granServicios=0;
+  for(const dia of d.dias){
+    const f=new Date(dia+'T12:00:00');
+    let totalDia=0, servDia=0;
+    const celdas=profs.map(p=>{
+      const c=d.celdas[`${dia}|${p}`];
+      if(!c) return '<td class="cero">—</td>';
+      totalDia+=c.total; servDia+=c.servicios;
+      totalesProf[p]=(totalesProf[p]||0)+c.total;
+      return `<td title="${c.servicios} servicio(s)">${money(c.total)}</td>`;
+    }).join('');
+    granTotal+=totalDia; granServicios+=servDia;
+    html+=`<tr><td class="izq">${f.toLocaleDateString('es-MX')}</td><td class="izq dia">${DIAS_ES[f.getDay()]}</td>`
+      + `<td>${servDia}</td>${celdas}<td><b>${money(totalDia)}</b></td></tr>`;
+  }
+  // Renglón de totales
+  html+=`<tr class="tot"><td class="izq">TOTAL</td><td></td><td>${granServicios}</td>`
+    + profs.map(p=>`<td>${money(totalesProf[p]||0)}</td>`).join('')
+    + `<td>${money(granTotal)}</td></tr>`;
+  $('tbl-semana').innerHTML=html;
+}
+
 /* ---- producción por profesionista (para pagos) ---- */
 let periodoProd='semana';
 document.querySelectorAll('#seg-prod button').forEach(b=>{
@@ -391,7 +459,7 @@ async function loadProduccion(){
 }
 
 async function loadDash(){
-  await loadProduccion();
+  await Promise.all([loadSemana(), loadProduccion()]);
   const r=await fetch('/api/dashboard'); if(!r.ok) return;
   const d=await r.json();
   mkChart('ch-dia',{type:'bar',data:{labels:d.porDia.map(x=>x.etiqueta),datasets:[{label:'Ingresos',data:d.porDia.map(x=>+x.total),backgroundColor:'#EC407A'}]},
