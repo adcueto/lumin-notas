@@ -173,14 +173,26 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
       return s;
     });
 
-    // Guardia de fecha: si quedó en el futuro, probable día/mes volteado
+    // Guardia de fecha: los años de 2 dígitos manuscritos se leen mal seguido.
+    // Corregimos años imposibles y volteos de día/mes.
     if (n.fecha && /^\d{4}-\d{2}-\d{2}$/.test(n.fecha)) {
       const hoy = new Date().toISOString().slice(0,10);
-      if (n.fecha > hoy) {
-        const [y,m,d] = n.fecha.split('-');
-        const c = `${y}-${d}-${m}`;
-        if (Number(d) <= 12 && c <= hoy) n.fecha = c;
+      const anioHoy = Number(hoy.slice(0,4));
+      let [y, m, d] = n.fecha.split('-');
+      // Año disparatado (2076, 1926...): las notas son siempre del año en curso o el pasado
+      if (Number(y) > anioHoy || Number(y) < anioHoy - 1) {
+        y = String(anioHoy);
+        n.fecha = `${y}-${m}-${d}`;
       }
+      // Fecha en el futuro: probable día/mes volteado
+      if (n.fecha > hoy) {
+        const cambiada = `${y}-${d}-${m}`;
+        if (Number(d) <= 12 && cambiada <= hoy) n.fecha = cambiada;
+      }
+      // Aviso para que la persona revise antes de guardar
+      const dias = Math.round((new Date(hoy) - new Date(n.fecha)) / 86400000);
+      if (dias < 0) n.aviso_fecha = 'La fecha es futura — revísala';
+      else if (dias > 60) n.aviso_fecha = `La fecha tiene ${dias} días de antigüedad — revísala`;
     }
     n.duplicado = false;
     if (n.folio && n.folio.toUpperCase() !== 'SN') {

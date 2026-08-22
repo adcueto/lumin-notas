@@ -242,6 +242,8 @@ const lineOk=t=>round2((t.servicios||[]).reduce((s,a)=>s+(Number(a.precio)||0),0
 
 window.upd=(id,path,val)=>{ const t=pending.find(x=>x.id===id); const [k,i,f]=path.split('.');
   if(i===undefined) t[k]=val; else t.servicios[+i][f]=(f==='precio'||f==='propina')?(Number(val)||0):val;
+  // Al corregir la fecha a mano, el aviso deja de aplicar
+  if(k==='fecha' && t.aviso_fecha){ delete t.aviso_fecha; render(); return; }
   // No redibujamos la tarjeta: eso destruiría el campo y sacaría el cursor.
   // Solo actualizamos los números que dependen de lo editado.
   refreshTotals(t); };
@@ -283,7 +285,7 @@ function receiptHTML(t){
     <div class="r-top"><p class="r-prov">${esc(t.cliente||'Sin nombre')}</p><div class="r-file">${esc(t.file)}</div></div>
     <div class="r-dots"></div>
     <div class="fields">
-      <div><label>Fecha</label><input value="${esc(t.fecha)}" oninput="upd(${t.id},'fecha',this.value)"></div>
+      <div><label>Fecha</label><input value="${esc(t.fecha)}" style="${t.aviso_fecha?'border-color:#D68910;background:#FEF9E7':''}" oninput="upd(${t.id},'fecha',this.value)">${t.aviso_fecha?`<div style="font-family:'Space Mono',monospace;font-size:9.5px;color:#B9770E;margin-top:3px">⚠ ${esc(t.aviso_fecha)}</div>`:''}</div>
       <div><label>Folio</label><input value="${esc(t.folio)}" oninput="upd(${t.id},'folio',this.value)"></div>
       <div><label>Cliente</label><input value="${esc(t.cliente)}" oninput="upd(${t.id},'cliente',this.value)"></div>
       <div><label>Pago</label><select onchange="upd(${t.id},'metodo_pago',this.value)">${METODOS.map(p=>`<option ${p===t.metodo_pago?'selected':''}>${p}</option>`).join('')}</select></div>
@@ -317,7 +319,7 @@ function render(){
   const cont=$('queue');
   // Reconstruimos solo las tarjetas cuya "forma" cambió (cargando, error, duplicado,
   // o número de renglones). Así no se pierde el cursor mientras alguien escribe.
-  const firma=t=>[t.loading?'L':'', t.error?'E':'', t.duplicado?'D':'', (t.servicios||[]).length].join('|');
+  const firma=t=>[t.loading?'L':'', t.error?'E':'', t.duplicado?'D':'', t.aviso_fecha?'F':'', (t.servicios||[]).length].join('|');
   const vivas=new Set(pending.map(t=>String(t.id)));
   [...cont.children].forEach(el=>{ if(!vivas.has(el.dataset.id)) el.remove(); });
   pending.forEach(t=>{
