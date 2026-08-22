@@ -1,0 +1,233 @@
+import express from 'express';
+import session from 'express-session';
+import multer from 'multer';
+import bcrypt from 'bcryptjs';
+import pg from 'pg';
+import Anthropic from '@anthropic-ai/sdk';
+import 'dotenv/config';
+
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const app = express();
+const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
+const CATS = ['Uñas','Pestañas','Cabello','Cejas','Maquillaje','Depilacion','Facial','Otro'];
+const EMPLEADAS = ['Adrian','Andy','Ana','Celeste','Dany','Edy','Elena','Blanca','Yareth','Jessica',
+  'Melissa','Joseline','Valeria','Lili','Lilian','Lisandro','Liz','Mely','Lupita','Mariana','Luz',
+  'Palomina','Jazmin','Nayeli','Ivonne','Waldo','Ingrid','Zuley'];
+const GARANTIAS = ['Sí','No','N/A'];
+const METODOS = ['Efectivo','Tarjeta','Transferencia','Depósito','Mixto','Otro'];
+
+app.set('trust proxy', 1);
+app.use(express.json({ limit: '1mb' }));
+app.use(session({
+  secret: process.env.SESSION_SECRET,
+  resave: false, saveUninitialized: false,
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 1000*60*60*24*30 }
+}));
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8*1024*1024 },
+  fileFilter: (_r, f, cb) => cb(null, f.mimetype.startsWith('image/')) });
+
+const auth = (req, res, next) => req.session.uid ? next() : res.status(401).json({ error: 'Inicia sesión para continuar.' });
+
+/* ── sesión ── */
+app.post('/api/login', async (req, res) => {
+  const { usuario, password } = req.body || {};
+  const { rows } = await pool.query('SELECT * FROM usuarios WHERE usuario=$1', [usuario]);
+  const u = rows[0];
+  if (!u || !bcrypt.compareSync(password || '', u.pass_hash))
+    return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
+  req.session.uid = u.id; req.session.nombre = u.nombre;
+  res.json({ nombre: u.nombre });
+});
+app.post('/api/logout', (req, res) => req.session.destroy(() => res.json({ ok: true })));
+app.get('/api/me', (req, res) => req.session.uid ? res.json({ nombre: req.session.nombre }) : res.status(401).json({}));
+
+/* ── extracción ── */
+const PROMPT = `Eres un capturista de notas de remisión de un salón de belleza (LUMIN LASHES & NAILS) en Querétaro, México. Analiza la foto de la nota y devuelve SOLO un objeto JSON, sin markdown ni explicación.
+
+Formato exacto:
+{"fecha":"YYYY-MM-DD","folio":"numero o SN","cliente":"","especialista":"","metodo_pago":"Efectivo|Tarjeta|Transferencia|Depósito|Mixto|Otro","total":0,"servicios":[{"descripcion":"","categoria":"","precio":0,"propina":0,"garantia":"N/A"}]}
+
+Reglas:
+- fecha: la nota trae DÍA/MES/AÑO, a veces con año de 2 dígitos (ej "17 08 26" = 17 de agosto de 2026). Interpreta años de 2 dígitos como 20XX. NUNCA leas el primer número como mes.
+- folio: el número en el recuadro superior derecho (o el # de nota). Si no hay, "SN".
+- cliente: el nombre escrito junto a "CLIENTE".
+- especialista: el nombre manuscrito en la columna "PROFESIONISTA". DEBE ser uno de estos nombres del catálogo del salón: ${EMPLEADAS.join(', ')}. Elige el del catálogo que más se parezca a lo escrito (la letra es manuscrita y puede estar abreviada o mal escrita). Alias conocidos: "Melina"=Mely, "Wualdo"/"Waldo"=Waldo. Si de plano no se parece a ninguno, deja el nombre tal como está escrito.
+- metodo_pago: revisa cuál casilla está marcada (Efvo./Efectivo, Tarjeta, Transf./Transferencia, Depósito, o si hay más de una marcada usa "Mixto"). Si ninguna casilla está marcada o el campo está vacío, usa SIEMPRE "Efectivo".
+- servicios: cada renglón de la tabla con su descripción y precio. Ignora renglones vacíos o tachados.
+- categoria: clasifica cada servicio en una de estas categorías exactas: ${CATS.join(', ')}. Uñas: gel, acrílico, relleno, manicure, pedicure, esmaltado, retiro. Pestañas: lash, extensiones, mirada, aplicación, rizado, anime. Cabello: corte, tinte, peinado, alaciado, mechas. Maquillaje: maquillaje social, novia. Facial: limpieza, hidratación.
+  IMPORTANTE para Cejas vs Depilacion:
+  * "Depilacion" = CUALQUIER depilación, de cualquier zona del cuerpo, incluidas las cejas. Abreviaciones comunes: "Depi", "Dep.", "Depil". Si el texto solo dice "Depi" sin más contexto, la descripción estándar es "Depilación de Cejas".
+  * "Cejas" = SOLO planchado (laminado), henna, o paquete de cejas. Nada de depilación.
+  Si no calza en ninguna, usa "Otro".
+- propina: solo si el ticket la menciona explícitamente por separado del cobro del servicio. Si no se menciona, usa 0.
+- garantia: usa "N/A" salvo que la nota indique explícitamente garantía Sí o No para ese servicio.
+- total: el número junto a "TOTAL".
+- Todo el texto manuscrito debe interpretarse con cuidado; si una palabra es ambigua, usa tu mejor lectura sin inventar.`;
+
+app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No llegó ninguna imagen.' });
+  try {
+    const msg = await anthropic.messages.create({
+      model: process.env.CLAUDE_MODEL || 'claude-haiku-4-5-20251001',
+      max_tokens: 3000,
+      messages: [{ role: 'user', content: [
+        { type: 'image', source: { type: 'base64', media_type: req.file.mimetype, data: req.file.buffer.toString('base64') } },
+        { type: 'text', text: PROMPT }
+      ]}]
+    });
+    const txt = msg.content.filter(c => c.type === 'text').map(c => c.text).join('');
+    const s = txt.indexOf('{'), e = txt.lastIndexOf('}');
+    if (s < 0) return res.status(422).json({ error: 'No se reconoció una nota en esta foto.' });
+    const n = JSON.parse(txt.slice(s, e + 1));
+    n.servicios = (n.servicios || []).map(x => ({
+      descripcion: x.descripcion || '',
+      categoria: CATS.includes(x.categoria) ? x.categoria : 'Otro',
+      precio: Number(x.precio) || 0,
+      propina: Number(x.propina) || 0,
+      garantia: GARANTIAS.includes(x.garantia) ? x.garantia : 'N/A'
+    }));
+    if (!METODOS.includes(n.metodo_pago)) n.metodo_pago = 'Efectivo';
+    // Normalizar descripciones abreviadas a nombre estándar
+    const SERV_ESTANDAR = [
+      [/^dep(i|il)?\.?$/i,                      'Depilación de Cejas'],
+      [/^dep(i|il)?\.?\s*(de\s*)?cejas?$/i,     'Depilación de Cejas'],
+      [/^dep(i|il)?\.?\s*(de\s*)?bozo$/i,       'Depilación de Bozo'],
+      [/^dep(i|il)?\.?\s*(de\s*)?axilas?$/i,    'Depilación de Axilas'],
+      [/^dep(i|il)?\.?\s*(de\s*)?piernas?$/i,   'Depilación de Piernas'],
+      [/^planchado(\s*de\s*cejas?)?$/i,        'Planchado de Cejas'],
+      [/^henna(\s*de\s*cejas?)?$/i,            'Henna de Cejas'],
+      [/^paquete\s*(de\s*)?cejas?$/i,          'Paquete de Cejas']
+    ];
+    n.servicios = n.servicios.map(s => {
+      const d = (s.descripcion || '').trim();
+      for (const [re, estandar] of SERV_ESTANDAR)
+        if (re.test(d)) return { ...s, descripcion: estandar };
+      return s;
+    });
+
+    // Alias y normalización contra el catálogo de empleadas
+    const ALIAS = { melina: 'Mely', wualdo: 'Waldo', waldo: 'Waldo' };
+    const norm = s => (s||'').toString().trim().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const nEsp = norm(n.especialista);
+    if (nEsp) {
+      if (ALIAS[nEsp]) n.especialista = ALIAS[nEsp];
+      else {
+        const exacta = EMPLEADAS.find(x => norm(x) === nEsp);
+        if (exacta) n.especialista = exacta;
+        else {
+          const parcial = EMPLEADAS.find(x => norm(x).startsWith(nEsp) || nEsp.startsWith(norm(x)));
+          if (parcial) n.especialista = parcial;
+        }
+      }
+    }
+
+    // Guardia de fecha: si quedó en el futuro, probable día/mes volteado
+    if (n.fecha && /^\d{4}-\d{2}-\d{2}$/.test(n.fecha)) {
+      const hoy = new Date().toISOString().slice(0,10);
+      if (n.fecha > hoy) {
+        const [y,m,d] = n.fecha.split('-');
+        const c = `${y}-${d}-${m}`;
+        if (Number(d) <= 12 && c <= hoy) n.fecha = c;
+      }
+    }
+    n.duplicado = false;
+    if (n.folio && n.folio.toUpperCase() !== 'SN') {
+      const { rowCount } = await pool.query('SELECT 1 FROM notas WHERE folio=$1', [n.folio]);
+      n.duplicado = rowCount > 0;
+    }
+    res.json(n);
+  } catch (err) {
+    console.error('extract:', err);
+    res.status(500).json({ error: 'La lectura falló. Intenta de nuevo.' });
+  }
+});
+
+/* ── guardar ── */
+app.post('/api/notas', auth, async (req, res) => {
+  const n = req.body;
+  if (!n?.fecha || !n.servicios?.length) return res.status(400).json({ error: 'Faltan datos de la nota.' });
+  const folio = (n.folio || 'SN').trim() || 'SN';
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    const { rows } = await c.query(
+      `INSERT INTO notas (fecha,folio,cliente,especialista,metodo_pago,total_nota,creado_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [n.fecha, folio, n.cliente||'', n.especialista||'', n.metodo_pago, round2(n.total)||0, req.session.uid]);
+    const nid = rows[0].id;
+    for (const sv of n.servicios)
+      await c.query(
+        `INSERT INTO servicios (nota_id,descripcion,categoria,precio,propina,garantia,notas_obs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [nid, sv.descripcion, sv.categoria || 'Otro', round2(sv.precio), round2(sv.propina)||0, sv.garantia||'N/A', sv.notas_obs||'']);
+    await c.query('COMMIT');
+    res.json({ ok: true, nota_id: nid });
+  } catch (err) {
+    await c.query('ROLLBACK');
+    if (err.code === '23505') return res.status(409).json({ error: `El folio ${folio} ya estaba capturado.` });
+    console.error('save:', err);
+    res.status(500).json({ error: 'No se pudo guardar la nota.' });
+  } finally { c.release(); }
+});
+
+/* ── consultas ── */
+app.get('/api/ingresos', auth, async (req, res) => {
+  const { desde, hasta } = req.query;
+  const { rows } = await pool.query(
+    `SELECT * FROM v_ingresos WHERE ($1::date IS NULL OR fecha>=$1) AND ($2::date IS NULL OR fecha<=$2)`,
+    [desde||null, hasta||null]);
+  res.json(rows);
+});
+
+app.get('/api/resumen', auth, async (_req, res) => {
+  const { rows } = await pool.query(`
+    SELECT (SELECT count(*) FROM notas) AS notas,
+           (SELECT count(*) FROM servicios) AS servicios,
+           (SELECT coalesce(sum(precio),0) FROM servicios) AS total,
+           (SELECT coalesce(sum(s.precio),0) FROM servicios s JOIN notas n ON n.id=s.nota_id WHERE n.metodo_pago='Efectivo') AS total_efectivo,
+           (SELECT coalesce(sum(s.precio),0) FROM servicios s JOIN notas n ON n.id=s.nota_id WHERE n.metodo_pago='Tarjeta') AS total_tarjeta,
+           (SELECT coalesce(sum(s.precio),0) FROM servicios s JOIN notas n ON n.id=s.nota_id WHERE n.metodo_pago='Transferencia') AS total_transferencia`);
+  res.json(rows[0]);
+});
+
+app.get('/api/dashboard', auth, async (_req, res) => {
+  const q = sql => pool.query(sql).then(r => r.rows);
+  try {
+    const [porEspecialista, porServicio, porDia, topClientes] = await Promise.all([
+      q(`SELECT n.especialista AS etiqueta, count(*) AS servicios, sum(s.precio) AS total
+         FROM servicios s JOIN notas n ON n.id=s.nota_id GROUP BY 1 ORDER BY 3 DESC`),
+      q(`SELECT s.descripcion AS etiqueta, count(*) AS veces, sum(s.precio) AS total
+         FROM servicios s GROUP BY 1 ORDER BY 3 DESC LIMIT 10`),
+      q(`SELECT to_char(n.fecha,'DD/MM') AS etiqueta, sum(s.precio) AS total
+         FROM servicios s JOIN notas n ON n.id=s.nota_id
+         WHERE n.fecha >= CURRENT_DATE - 30 GROUP BY n.fecha ORDER BY n.fecha`),
+      q(`SELECT n.cliente AS etiqueta, count(*) AS visitas, sum(s.precio) AS total
+         FROM servicios s JOIN notas n ON n.id=s.nota_id
+         WHERE n.cliente <> '' GROUP BY 1 ORDER BY 3 DESC LIMIT 10`)
+    ]);
+    res.json({ porEspecialista, porServicio, porDia, topClientes });
+  } catch (err) { console.error('dashboard:', err); res.status(500).json({ error: 'Error cargando dashboard.' }); }
+});
+
+app.get('/api/export.csv', auth, async (req, res) => {
+  const { desde, hasta } = req.query;
+  const { rows } = await pool.query(
+    `SELECT * FROM v_ingresos WHERE ($1::date IS NULL OR fecha>=$1) AND ($2::date IS NULL OR fecha<=$2)`,
+    [desde||null, hasta||null]);
+  // Mismas columnas y orden que la plantilla LUMIN_Notas del negocio, listo para pegar
+  const head = ['Fecha','Año','Mes','Semana','# Nota','Empleada','Servicio','Categoría','Cobro','Propina','Metodo_Pago','Garantía','Notas'];
+  const q = v => `"${String(v??'').replace(/"/g,'""')}"`;
+  const body = rows.map(r => [r.fecha.toISOString().slice(0,10), r.anio, r.mes, r.semana, r.folio,
+    r.especialista, r.descripcion, r.categoria, r.precio, r.propina, r.metodo_pago, r.garantia, r.notas_obs].map(q).join(','));
+  res.setHeader('Content-Type','text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition','attachment; filename="lumin-notas.csv"');
+  res.send('\uFEFF'+[head.map(q).join(','), ...body].join('\n'));
+});
+
+app.use(express.static('public'));
+const port = process.env.PORT || 3001;
+app.listen(port, '127.0.0.1', () => console.log('LUMIN notas en :' + port));
