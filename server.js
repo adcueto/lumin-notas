@@ -57,7 +57,7 @@ Reglas:
 - especialista: el nombre manuscrito en la columna "PROFESIONISTA". DEBE ser uno de estos nombres del catálogo del salón: ${EMPLEADAS.join(', ')}. Elige el del catálogo que más se parezca a lo escrito (la letra es manuscrita y puede estar abreviada o mal escrita). Alias conocidos: "Melina"=Mely, "Wualdo"/"Waldo"=Waldo. Si de plano no se parece a ninguno, deja el nombre tal como está escrito.
 - metodo_pago: revisa cuál casilla está marcada (Efvo./Efectivo, Tarjeta, Transf./Transferencia, Depósito, o si hay más de una marcada usa "Mixto"). Si ninguna casilla está marcada o el campo está vacío, usa SIEMPRE "Efectivo".
 - servicios: cada renglón de la tabla con su descripción y precio. Ignora renglones vacíos o tachados.
-- categoria: clasifica cada servicio en una de estas categorías exactas: ${CATS.join(', ')}. Uñas: gel, acrílico, relleno, manicure, pedicure, esmaltado, retiro. Pestañas: lash, extensiones, mirada, aplicación, rizado, anime. Cabello: corte, tinte, peinado, alaciado, mechas. Maquillaje: maquillaje social, novia. Facial: limpieza, hidratación.
+- categoria: clasifica cada servicio en una de estas categorías exactas: ${CATS.join(', ')}. Uñas: gel, acrílico, relleno, manicure, pedicure, esmaltado, retiro. Pestañas: lash, extensiones, mirada, aplicación, rizado, anime. Cabello: TODO lo que sea corte (corte de dama, corte caballero, corte niño, "corte" a secas), tinte, peinado, alaciado, mechas. Maquillaje: maquillaje social, novia. Facial: limpieza, hidratación.
   IMPORTANTE para Cejas vs Depilacion:
   * "Depilacion" = CUALQUIER depilación, de cualquier zona del cuerpo, incluidas las cejas. Abreviaciones comunes: "Depi", "Dep.", "Depil". Si el texto solo dice "Depi" sin más contexto, la descripción estándar es "Depilación de Cejas".
   * "Cejas" = SOLO planchado (laminado), henna, o paquete de cejas. Nada de depilación.
@@ -105,6 +105,21 @@ app.post('/api/extract', auth, upload.single('foto'), async (req, res) => {
       const d = (s.descripcion || '').trim();
       for (const [re, estandar] of SERV_ESTANDAR)
         if (re.test(d)) return { ...s, descripcion: estandar };
+      return s;
+    });
+
+    // Reglas fijas de categoría (mandan sobre lo que haya clasificado la IA)
+    const sinAcentos = s => (s||'').toString().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const REGLAS_CAT = [
+      [/\bcorte/,                                   'Cabello'],      // todo corte va a Cabello
+      [/\bdepi|\bdepil/,                            'Depilacion'],
+      [/planchado|henna|paquete\s*(de\s*)?cejas/,   'Cejas']
+    ];
+    n.servicios = n.servicios.map(s => {
+      const d = sinAcentos(s.descripcion);
+      for (const [re, cat] of REGLAS_CAT)
+        if (re.test(d)) return { ...s, categoria: cat };
       return s;
     });
 
