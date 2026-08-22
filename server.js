@@ -274,6 +274,55 @@ app.get('/api/dashboard', auth, async (_req, res) => {
   } catch (err) { console.error('dashboard:', err); res.status(500).json({ error: 'Error cargando dashboard.' }); }
 });
 
+/* Producción por profesionista — para calcular pagos.
+   ?periodo=hoy|semana|semana_pasada|quincena|mes|mes_pasado  o  ?desde=&hasta= */
+app.get('/api/produccion', auth, async (req, res) => {
+  const { periodo, desde, hasta } = req.query;
+  let filtro, params = [], titulo;
+  switch (periodo) {
+    case 'hoy':
+      filtro = 'n.fecha = CURRENT_DATE'; titulo = 'Hoy'; break;
+    case 'semana_pasada':
+      filtro = `date_trunc('week', n.fecha) = date_trunc('week', CURRENT_DATE - 7)`;
+      titulo = 'Semana pasada'; break;
+    case 'quincena':
+      filtro = `n.fecha >= date_trunc('month', CURRENT_DATE) + (CASE WHEN EXTRACT(DAY FROM CURRENT_DATE) > 15 THEN interval '15 days' ELSE interval '0 days' END)
+                AND n.fecha <= CURRENT_DATE`;
+      titulo = 'Quincena en curso'; break;
+    case 'mes':
+      filtro = `date_trunc('month', n.fecha) = date_trunc('month', CURRENT_DATE)`;
+      titulo = 'Mes en curso'; break;
+    case 'mes_pasado':
+      filtro = `date_trunc('month', n.fecha) = date_trunc('month', CURRENT_DATE - interval '1 month')`;
+      titulo = 'Mes pasado'; break;
+    case 'rango':
+      params = [desde || null, hasta || null];
+      filtro = '($1::date IS NULL OR n.fecha >= $1) AND ($2::date IS NULL OR n.fecha <= $2)';
+      titulo = `${desde || 'inicio'} a ${hasta || 'hoy'}`; break;
+    default:
+      filtro = `date_trunc('week', n.fecha) = date_trunc('week', CURRENT_DATE)`;
+      titulo = 'Semana en curso';
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT s.profesionista,
+              count(*)                       AS servicios,
+              sum(s.precio)                  AS total,
+              coalesce(sum(s.propina),0)     AS propinas,
+              count(DISTINCT n.id)           AS notas,
+              coalesce(sum(s.precio) FILTER (WHERE n.metodo_pago='Efectivo'),0) AS efectivo,
+              coalesce(sum(s.precio) FILTER (WHERE n.metodo_pago<>'Efectivo'),0) AS otros
+       FROM servicios s JOIN notas n ON n.id = s.nota_id
+       WHERE s.profesionista <> '' AND ${filtro}
+       GROUP BY 1 ORDER BY 3 DESC`, params);
+    const totalGeneral = rows.reduce((a, r) => a + Number(r.total), 0);
+    res.json({ titulo, filas: rows, total: totalGeneral });
+  } catch (err) {
+    console.error('produccion:', err);
+    res.status(500).json({ error: 'Error consultando producción.' });
+  }
+});
+
 app.get('/api/export.csv', auth, async (req, res) => {
   const { desde, hasta } = req.query;
   const { rows } = await pool.query(
